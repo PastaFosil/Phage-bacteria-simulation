@@ -47,10 +47,14 @@ def totalPairForce(posv, dist):
     mImgDist = ref-XYdist #Distancia entre pares
     mImgDist = mImgDist - np.round_(mImgDist/L)*L #Distancia de minima imagen
     #print(np.sum(dist))
-    force = wca(dist[:Nv, :Nv]) #Fuerza debida a WCA (sobre los virus)
-    mImgDist[:Nv, :Nv] *= np.transpose(np.array([force,]*2))
+    forceWCA = wca(dist[:Nv, :Nv]) #Fuerza debida a WCA (sobre los virus)
+    mImgDist[:Nv, :Nv] *= np.transpose(np.array([forceWCA,]*2))
     
-    return np.sum(mImgDist, axis = 1)
+    y = np.sum(mImgDist, axis = 1)
+    print("=============\n")
+    print(y.shape)
+    print("\n=============")
+    return y#np.sum(mImgDist, axis = 1)
 
 @jit
 def MSD(pos_0, pos_t):
@@ -75,22 +79,33 @@ def g(dist, r, dr):
     return k*(L/dist.shape[0])**2
     
 def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posiciones y updateaciones
-    global L,sigmav, count, posTv, posv, posNPv
+    global L,sigmav, count, posT, posv, posNP
 
     #print(count)
     #print('posv', posv)
-    stocastic = np.random.normal(scale=1, size=(Nv,2))
+    stocastic = np.random.normal(scale=1, size=(Nv+Nb,2))
     
     tree = cKDTree(pos,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
     dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
     dist = dist.toarray()
     LJ = totalPairForce(pos, dist)
     
-    pos[:Nv,0] += stocastic[:Nv,0]*(2*D*deltat)**(1/2)+stocastic[-Nb:,0]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,0] #Actualizacion de la posicion en X de las particulas
-    pos[:Nv,1] += stocastic[:Nv,1]*(2*D*deltat)**(1/2)+stocastic[-Nb:,1]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,1] #                             en Y
+    #pos[:Nv,0] += stocastic[:Nv,0]*(2*D*deltat)**(1/2)+stocastic[-Nb:,0]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,0] #Actualizacion de la posicion en X de las particulas
+    #pos[:Nv,1] += stocastic[:Nv,1]*(2*D*deltat)**(1/2)+stocastic[-Nb:,1]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,1] #                             en Y
+    print(np.max(LJ))
+    
+    pos[:Nv,0] += stocastic[:Nv,0]*(2*D*deltat)**(1/2) + (deltat*D/T)*LJ[:Nv,0] #Actualizacion de la posicion en X de las particulas
+    pos[:Nv,1] += stocastic[:Nv,1]*(2*D*deltat)**(1/2) + (deltat*D/T)*LJ[:Nv,1] #                             en Y
 
-    posNPv[:,0] += stocastic[:,0]*(2*D*deltat)**(1/2)+(deltat*D/T)*LJ[:,0]
-    posNPv[:,1] += stocastic[:,1]*(2*D*deltat)**(1/2)+(deltat*D/T)*LJ[:,1]
+    pos[-Nb:,0] += stocastic[-Nb:,0]*(2*Db*deltat)**(1/2)
+    pos[-Nb:,1] += stocastic[-Nb:,0]*(2*Db*deltat)**(1/2)
+
+    posNP[:,0] += stocastic[:,0]*(2*D*deltat)**(1/2)+(deltat*D/T)*LJ[:,0]
+    #posNP[:,0] += stocastic[:,0]*(2*D*deltat)**(1/2)
+    #posNP[:Nv,0] += (deltat*D/T)*LJ[:Nv,0]
+    posNP[:,1] += stocastic[:,1]*(2*D*deltat)**(1/2)+(deltat*D/T)*LJ[:,1]
+    #posNP[:,1] += stocastic[:,1]*(2*D*deltat)**(1/2)
+    #posNP[:Nv,1] += (deltat*D/T)*LJ[:Nv,1]
     
     print('t=', count*deltat)
     
@@ -102,8 +117,9 @@ def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posicion
         
     count += 1
 
-    #brv.set_offsets(posv)
-    #return brv,
+    brv.set_offsets(pos[:Nv])
+    brb.set_offsets(pos[-Nb:])
+    return brv, brb
 
 "------------------------------------------------------------------------"
 # [thsigmav t+1]=arg(suma exp(i [thsigmav t]) )+[sigmav][chi]
@@ -114,7 +130,7 @@ def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posicion
 
 deltat = 1e-4 #Intervalo de tiempo
 inter = 5 #Iteraciones para el guardado de posiciones
-iterations = 20000 #Numero de cuadros
+iterations = 2000 #Numero de cuadros
 
 T = 1.0 #Temperatura
 
@@ -176,7 +192,7 @@ for i in range(10):
     posv = np.random.uniform(sigmav/2,L-sigmav/2,size=(Nv,2)) #Arreglo de la posicion de las particulas
     posv = changePos(posv)
     posNPv = np.ones(shape=(Nv,2))*posv #Posicion sin condiciones periodicas de frontera
-    posTv = np.array([posv]) #Posicion al tiempo t
+    posT = np.array([posv]) #Posicion al tiempo t
 
     count = 1
     for i in range(iterations):
@@ -185,8 +201,8 @@ for i in range(10):
     pMSD = np.array([])
     temp = np.array([])
     k = 0
-    for t in posTv:
-        pMSD = np.append(pMSD, MSD(posTv[0], t))
+    for t in posT:
+        pMSD = np.append(pMSD, MSD(posT[0], t))
         temp = np.append(temp, deltat*inter*(k+3))
         k += 1
 
@@ -201,7 +217,7 @@ np.save(file, D_eff)
         posv = np.random.uniform(sigmav/2,L-sigmav/2,size=(Nv,2)) #Arreglo de la posicion de las particulas
         posv = changePos(posv)
         posNPv = np.ones(shape=(Nv,2))*posv #Posicion sin condiciones periodicas de frontera
-        posTv = np.array([posv]) #Posicion al tiempo t
+        posT = np.array([posv]) #Posicion al tiempo t
 
         count = 1
         #anim = FuncAnimation(fig,animate,frames=iterations,interval=1, blit=True, repeat=False) #Generacion de la animacion
@@ -229,12 +245,14 @@ plt.show()
 '''
 '================================================================================================'
 'ANaLISIS DE DATOS'
-'''
+
 pMSD = np.array([])
+pMSDb = np.array([])
 temp = np.array([])
 k = 0
-for t in posTv:
-    pMSD = np.append(pMSD, MSD(posTv[0], t))
+for t in posT:
+    pMSD = np.append(pMSD, MSD(posT[0,:Nv,:], t[:Nv,:]))
+    pMSDb = np.append(pMSDb, MSD(posT[0,-Nb:,:], t[-Nb:,:]))
     temp = np.append(temp, deltat*inter*(k+3))
     k += 1
 
@@ -258,13 +276,32 @@ a1.set_ylabel('MSD')
 lin = np.polyfit(temp, pMSD, 1)
 #print(lin)
 lin_model_sim = np.poly1d(lin)
-lin_model_an = np.poly1d([4*D, lin[1]])
+lin_model_an = np.poly1d([4*Db, lin[1]])
 
 a1.plot(temp, lin_model_sim(temp),color='g')
 a1.plot(temp, lin_model_an(temp),color = 'r')
+
+
+
+lin = np.polyfit(temp, pMSDb, 1)
+lin_model_sim = np.poly1d(lin)
+lin_model_an = np.poly1d([4*Db, lin[1]])
+
+a2.scatter(temp,pMSDb, color='k' )
+a2.set_title('MSD')
+a2.set_xlabel('Tiempo')
+a2.set_ylabel('MSD')
+
+lin = np.polyfit(temp, pMSDb, 1)
+#print(lin)
+lin_model_sim = np.poly1d(lin)
+lin_model_an = np.poly1d([4*Db, lin[1]])
+
+a2.plot(temp, lin_model_sim(temp),color='g')
+a2.plot(temp, lin_model_an(temp),color = 'r')
+
 '''
-'''
-#print(posTv)
+#print(posT)
 tree = cKDTree(posv,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
 dist = tree.sparse_distance_matrix(tree, max_distance=L/2,output_type='coo_matrix') #Matriz con los puntos mas cercanos
 dist = dist.toarray()
