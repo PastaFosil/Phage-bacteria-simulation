@@ -2,7 +2,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-from numba import jit
+from numba import jit, njit
 
 def changePos(posv):
     tree = cKDTree(posv,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
@@ -26,9 +26,11 @@ def wca(r_ij):
 
     mask = r_ij!=0
     r_ij[mask] = (48/r_ij[mask])*((sigmav/r_ij[mask])**12-.5*(sigmav/r_ij[mask])**6)
-    #r_ij = np.where(r_ij>0, (48/r_ij)*((sigmav/r_ij)**12-.5*(sigmav/r_ij)**6), r_ij)
-    #r_ij = np.piecewise(r_ij, [r_ij<=0.0, r_ij>0.0], [0.0, (48.0/r_ij)*((sigmav/r_ij)**12-.5*(sigmav/r_ij)**6)])
+
     return r_ij
+
+def electrostatic(r_ij):
+
 #@jit
 def totalPairForce(posv, dist):
     global sigmav, L
@@ -36,33 +38,59 @@ def totalPairForce(posv, dist):
     #dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
     #dist = dist.toarray()
     
-    XYdist = np.ones((pos.shape[0],pos.shape[0],2))*pos
-    ref = np.ones((pos.shape[0],pos.shape[0],2))
-    for i in range(pos.shape[0]):
-        ref[i] *= pos[i]
+    XYdist = np.ones((pos.shape[0],pos.shape[0],2))*pos #Posiciones de todas las particulas (un conjunto para cada particula)
+    ref = np.ones((pos.shape[0],pos.shape[0],2)) #Posiciones repetidas (cada conjunto ayudara a calcular las componentes de la distancia de una particula dada a todas las demas)
+    #for i in range(pos.shape[0]): #Dandole valores a los grupos de ref
+    #    ref[i] *= pos[i]
+    ref = duplicatePosition(ref, pos)
 
-    XYdist[dist==0] = [0,0]
-    ref[dist==0] = [0,0]
+    XYdist[dist==0] = [0,0] #Ignorar las que estan fuera de la distancia de corte
+    ref[dist==0] = [0,0] 
 
     mImgDist = ref-XYdist #Distancia entre pares
-    mImgDist = mImgDist - np.round_(mImgDist/L)*L #Distancia de minima imagen
+    mImgDist = mImgDist - np.round_(mImgDist/L)*L #Distancia de minima imagen (vectores directores entre pares)
     #print(np.sum(dist))
     forceWCA = wca(dist[:Nv, :Nv]) #Fuerza debida a WCA (sobre los virus)
+    forceElectro = np.zeros(mImgDist.shape)
+    forceElectro[-Nb:, :Nv] = mImgDist[-Nb:, :Nv]
+    forceElectro[:Nv, -Nb:] = mImgDist[:Nv, -Nb:]
     mImgDist[:Nv, :Nv] *= np.transpose(np.array([forceWCA,]*2))
     
-    y = np.sum(mImgDist, axis = 1)
-    print("=============\n")
-    print(y.shape)
-    print("\n=============")
-    return y#np.sum(mImgDist, axis = 1)
 
-@jit
+    return np.sum(mImgDist, axis = 1)
+
+@njit
+def duplicatePosition(ref, pos):
+    for i in range(pos.shape[0]): #Dandole valores a los grupos de ref
+        ref[i] *= pos[i]
+    return ref
+
+@njit
 def MSD(pos_0, pos_t):
     msd = norm2(pos_0 - pos_t)
     return np.mean(msd)
-@jit
+
+@njit
 def norm2(vec):
     return vec[:,0]**2+vec[:,1]**2
+@njit
+def unitVector(v):
+    uv = np.zeros(np.shape(v))
+    #norm = np.sqrt(norm2(v)[np.newaxis].T)
+    norm = np.sqrt(norm2(v))
+    norm = reshapeRow(norm)
+    for i in range(len(norm)):
+        if norm[i]!=0:
+            uv[i] = v[i]/norm[i]
+
+    return uv
+@njit
+def reshapeRow(v):
+    l = len(v)
+    new = np.zeros((l,1))
+    for i in range(l):
+        new[i,0] = v[i]
+    return new
 
 def g(dist, r, dr):
     global L
@@ -77,35 +105,41 @@ def g(dist, r, dr):
         k[i] = np.count_nonzero(d)
     #print('k2: ', k)
     return k*(L/dist.shape[0])**2
-    
-def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posiciones y updateaciones
-    global L,sigmav, count, posT, posv, posNP
+
+#def selfPropulsion()    
+def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posiciones y orientaciones
+    global L,sigmav, count, posT, posv, posNP, orient
 
     #print(count)
     #print('posv', posv)
     stocastic = np.random.normal(scale=1, size=(Nv+Nb,2))
+    stocasticR = np.random.uniform(-np.pi, np.pi, size=Nv+Nb)
     
     tree = cKDTree(pos,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
     dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
     dist = dist.toarray()
-    LJ = totalPairForce(pos, dist)
+    #LJ = totalPairForce(pos, dist)
     
     #pos[:Nv,0] += stocastic[:Nv,0]*(2*D*deltat)**(1/2)+stocastic[-Nb:,0]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,0] #Actualizacion de la posicion en X de las particulas
     #pos[:Nv,1] += stocastic[:Nv,1]*(2*D*deltat)**(1/2)+stocastic[-Nb:,1]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,1] #                             en Y
-    print(np.max(LJ))
     
-    pos[:Nv,0] += stocastic[:Nv,0]*(2*D*deltat)**(1/2) + (deltat*D/T)*LJ[:Nv,0] #Actualizacion de la posicion en X de las particulas
-    pos[:Nv,1] += stocastic[:Nv,1]*(2*D*deltat)**(1/2) + (deltat*D/T)*LJ[:Nv,1] #                             en Y
+    orient[:Nv] += stocasticR[:Nv]*stocRV
+    orient[-Nb:] += stocasticR[-Nb:]*stocRB
+    orient = np.clip(orient, -np.pi, np.pi)
 
-    pos[-Nb:,0] += stocastic[-Nb:,0]*(2*Db*deltat)**(1/2)
-    pos[-Nb:,1] += stocastic[-Nb:,0]*(2*Db*deltat)**(1/2)
+    pos[:Nv,0] += stocastic[:Nv,0]*stocV# + frcV*LJ[:Nv,0] #Actualizacion de la posicion en X de las particulas
+    pos[:Nv,1] += stocastic[:Nv,1]*stocV# + frcV*LJ[:Nv,1] #                             en Y
+    posNP[:Nv,0] += stocastic[:Nv,0]*stocV# + frcV*LJ[:,0]
+    posNP[:Nv,1] += stocastic[:Nv,1]*stocV# + frcV*LJ[:,1]
 
-    posNP[:,0] += stocastic[:,0]*(2*D*deltat)**(1/2)+(deltat*D/T)*LJ[:,0]
+    print(orient[-Nb:])
+    pos[-Nb:,0] += stocastic[-Nb:,0]*stocB + frcB*np.cos(orient[-Nb:])
+    pos[-Nb:,1] += stocastic[-Nb:,1]*stocB + frcB*np.sin(orient[-Nb:])
+    posNP[-Nb:,0] += stocastic[-Nb:,0]*stocB + frcB*np.cos(orient[-Nb:])
+    posNP[-Nb:,1] += stocastic[-Nb:,1]*stocB + frcB*np.sin(orient[-Nb:])
     #posNP[:,0] += stocastic[:,0]*(2*D*deltat)**(1/2)
-    #posNP[:Nv,0] += (deltat*D/T)*LJ[:Nv,0]
-    posNP[:,1] += stocastic[:,1]*(2*D*deltat)**(1/2)+(deltat*D/T)*LJ[:,1]
+    
     #posNP[:,1] += stocastic[:,1]*(2*D*deltat)**(1/2)
-    #posNP[:Nv,1] += (deltat*D/T)*LJ[:Nv,1]
     
     print('t=', count*deltat)
     
@@ -117,9 +151,9 @@ def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posicion
         
     count += 1
 
-    brv.set_offsets(pos[:Nv])
+    #brv.set_offsets(pos[:Nv])
     brb.set_offsets(pos[-Nb:])
-    return brv, brb
+    return brb,# brb,
 
 "------------------------------------------------------------------------"
 # [thsigmav t+1]=arg(suma exp(i [thsigmav t]) )+[sigmav][chi]
@@ -130,7 +164,7 @@ def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posicion
 
 deltat = 1e-4 #Intervalo de tiempo
 inter = 5 #Iteraciones para el guardado de posiciones
-iterations = 2000 #Numero de cuadros
+iterations = 20000 #Numero de cuadros
 
 T = 1.0 #Temperatura
 
@@ -140,18 +174,24 @@ phiv = .05 #packing fraction virus
 Nv = 1000
 rhov = 4*phiv/(np.pi*sigmav**2) #Densidad de particulas
 D = .077 #Coeficiente de difusion virus
-Drv = .077 #Coeficiente de difusion orientacional virus
+Drv = 3*D/sigmav**2 #Coeficiente de difusion orientacional virus
+stocV = (2*D*deltat)**(1/2) #Magnitud del termino estocastico (virus)
+stocRV = (2*Drv*deltat)**(1/2) #Magnitud del termino estocastico rotacional (virus)
+frcV = deltat*D/T #Factor de terminos de interacciones isotropa y anisotropa
 
-sigmab = 1 #Diametro de las bacterias
+sigmab = 10 #Diametro de las bacterias
 phib = .05 #packing fraction bacterias
-Nb = 100
-Db = .088 #Coeficiente de difusion bacteria
-Drb = .077 #Coeficiente de difusion orientacional virus
+Nb = 10
+Db = .077 #Coeficiente de difusion bacteria
+Drb = 3*D/sigmab**2 #Coeficiente de difusion orientacional virus
+stocB = (2*Db*deltat)**(1/2) #Magnitud del termino estocastico (bacteria)
+stocRB = (2*Drb*deltat)**(1/2) #Magnitud del termino estocastico rotacional (bacteria)
+frcB = deltat*Db/T #Factor de terminos de autopropulsion e interaccion anisotropa
 
 rc = sigmav*2**(1/6) #Radio de corte
 #L = 30.0 #Tamano de la caja
 L = np.sqrt(Nv*np.pi/(4*phiv))
-print(" Nv",Nv)
+print(" Nv %s\n Nb %s" % (Nv, Nb))
 
 '================================================================================================'
 'CONFIGURACIoN INICIAL'
@@ -165,18 +205,19 @@ posb = changePos(posb) #Eliminacion de solapamiento
 pos = np.append(posv, posb, axis=0) #posicion de las particulas (virus y bacterias)
 posNP = np.ones(shape=(Nv+Nb, 2))*pos #Posicion sin condiciones periodicas de frontera
 posT = np.array([pos]) #Posicion al tiempo t
-orient = np.random.rand(Nv+Nb,2) #Orientacion de las particulas
+orient = np.random.uniform(-np.pi, np.pi, size=Nv+Nb) #Orientacion de las particulas
 
 fig, ax= plt.subplots(figsize=(6,6)) #Creacion de la figura y subtrama
 ax.set_xlim([0,L])
 ax.set_ylim([0,L])
-brv = ax.scatter(posv[:Nv,0],posv[:Nv,1])
+#brv = ax.scatter(posv[:Nv,0],posv[:Nv,1])
 brb = ax.scatter(posv[-Nb:,0],posv[-Nb:,1])
 
 '================================================================================================'
 'ANIMACIoN'
 
 count = 1
+
 anim = FuncAnimation(fig,animate,frames=iterations,interval=1, blit=True, repeat=False) #Generacion de la animacion
 plt.show()
 """
@@ -248,35 +289,33 @@ plt.show()
 
 pMSD = np.array([])
 pMSDb = np.array([])
+pMSDtotal = np.array([])
 temp = np.array([])
 k = 0
 for t in posT:
     pMSD = np.append(pMSD, MSD(posT[0,:Nv,:], t[:Nv,:]))
     pMSDb = np.append(pMSDb, MSD(posT[0,-Nb:,:], t[-Nb:,:]))
+    pMSDtotal = np.append(pMSDtotal, MSD(posT[0], t))
     temp = np.append(temp, deltat*inter*(k+3))
     k += 1
-
+"""
 nombre = 'phiv_'+str(phiv).replace('.', '_')
 data = np.array([temp, pMSD])
 file = open(nombre, 'wb')
 np.save(file, data)
 file.close
+"""
+
+f, (a1,a2,a3) = plt.subplots(1,3)
 
 lin = np.polyfit(temp, pMSD, 1)
 lin_model_sim = np.poly1d(lin)
 lin_model_an = np.poly1d([4*D, lin[1]])
 
-f, (a1,a2) = plt.subplots(1,2)
-
 a1.scatter(temp,pMSD, color='k' )
 a1.set_title('MSD')
 a1.set_xlabel('Tiempo')
 a1.set_ylabel('MSD')
-
-lin = np.polyfit(temp, pMSD, 1)
-#print(lin)
-lin_model_sim = np.poly1d(lin)
-lin_model_an = np.poly1d([4*Db, lin[1]])
 
 a1.plot(temp, lin_model_sim(temp),color='g')
 a1.plot(temp, lin_model_an(temp),color = 'r')
@@ -292,14 +331,22 @@ a2.set_title('MSD')
 a2.set_xlabel('Tiempo')
 a2.set_ylabel('MSD')
 
-lin = np.polyfit(temp, pMSDb, 1)
-#print(lin)
-lin_model_sim = np.poly1d(lin)
-lin_model_an = np.poly1d([4*Db, lin[1]])
-
 a2.plot(temp, lin_model_sim(temp),color='g')
 a2.plot(temp, lin_model_an(temp),color = 'r')
 
+lin = np.polyfit(temp, pMSDb, 1)
+lin_model_sim = np.poly1d(lin)
+lin_model_an = np.poly1d([4*Db, lin[1]])
+
+a3.scatter(temp,pMSDb, color='k' )
+a3.set_title('MSD')
+a3.set_xlabel('Tiempo')
+a3.set_ylabel('MSD')
+
+a3.plot(temp, lin_model_sim(temp),color='g')
+a3.plot(temp, lin_model_an(temp),color = 'r')
+
+plt.show()
 '''
 #print(posT)
 tree = cKDTree(posv,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
