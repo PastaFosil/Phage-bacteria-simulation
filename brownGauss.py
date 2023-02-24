@@ -30,9 +30,14 @@ def wca(r_ij):
     return r_ij
 
 def electrostatic(r_ij):
+    global eps, qv, qb
+    mask = r_ij!=0
+    r_ij[mask] = -eps*qv*qb/r_ij[mask]
+
+    return r_ij
 
 #@jit
-def totalPairForce(posv, dist):
+def totalPairForce(pos, dist, ev):
     global sigmav, L
     #tree = cKDTree(posv,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
     #dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
@@ -47,17 +52,42 @@ def totalPairForce(posv, dist):
     XYdist[dist==0] = [0,0] #Ignorar las que estan fuera de la distancia de corte
     ref[dist==0] = [0,0] 
 
-    mImgDist = ref-XYdist #Distancia entre pares
+    mImgDist = ref-XYdist #Distancia entre pares (dirigido hacia particula de referencia)
     mImgDist = mImgDist - np.round_(mImgDist/L)*L #Distancia de minima imagen (vectores directores entre pares)
-    #print(np.sum(dist))
-    forceWCA = wca(dist[:Nv, :Nv]) #Fuerza debida a WCA (sobre los virus)
-    forceElectro = np.zeros(mImgDist.shape)
-    forceElectro[-Nb:, :Nv] = mImgDist[-Nb:, :Nv]
-    forceElectro[:Nv, -Nb:] = mImgDist[:Nv, -Nb:]
-    mImgDist[:Nv, :Nv] *= np.transpose(np.array([forceWCA,]*2))
-    
+    unit = unitVector(mImgDist)
+    dotFactor = dot(unit, ev)
+    dotFactor = checkOrient(dotFactor)
 
+    forceWCA = wca(dist[:Nv, :Nv]) #Fuerza debida a WCA (sobre los virus)
+    
+    #forceElectro = np.zeros(mImgDist.shape)
+    #forceElectro[-Nb:, :Nv] = np.ones((Nb,Nv))*mImgDist[-Nb:, :Nv]
+    forceElectro = electrostatic(dist[-Nb:, :Nv])
+    forceElectro[:Nv, -Nb:] = -forceElectro[-Nb:, :Nv].T
+    #forceElectro[:Nv, -Nb:] = mImgDist[:Nv, -Nb:]
+    
+    mImgDist[:Nv, :Nv] *= np.transpose(np.array([forceWCA,]*2))
+    mImgDist[-Nb:, :Nv] *= np.transpose(np.array([forceElectro,]*2))
+    mImgDist[:Nv, -Nb:] *= np.transpose(np.array([-np.transpose(forceElectro),]*2))
+    
     return np.sum(mImgDist, axis = 1)
+@njit
+def checkOrient(u):
+    for i in range(len(u)):
+        if u[i]>=0:
+            u[i] = 0
+    return u
+@njit
+def dot(v1, v2):
+    if v1.ndim==3:
+        sh = np.shape(v1)
+        v1 = v1.reshape((sh[0]*sh[1],2))
+        v2 = v2.reshape((sh[0]*sh[1],2))
+        d = v1[:,0]*v2[:,0] + v1[:,1]*v2[:,1]
+        d = d.reshape((sh[0],sh[1],1))
+    elif v2.ndim==2:
+        d = v1[:,0]*v2[:,0] + v1[:,1]*v2[:,1]
+    return d
 
 @njit
 def duplicatePosition(ref, pos):
@@ -67,23 +97,25 @@ def duplicatePosition(ref, pos):
 
 @njit
 def MSD(pos_0, pos_t):
-    msd = norm2(pos_0 - pos_t)
+    v = pos_0 - pos_t
+    msd = dot(v,v)
     return np.mean(msd)
 
 @njit
-def norm2(vec):
-    return vec[:,0]**2+vec[:,1]**2
-@njit
 def unitVector(v):
-    uv = np.zeros(np.shape(v))
-    #norm = np.sqrt(norm2(v)[np.newaxis].T)
-    norm = np.sqrt(norm2(v))
-    norm = reshapeRow(norm)
-    for i in range(len(norm)):
+    sh = np.shape(v)
+    v = v.reshape((sh[0]*sh[1],2))
+    uv = np.zeros((sh[0]*sh[1],2))
+    #norm = np.sqrt(dot(v)[np.newaxis].T)
+    norm = np.sqrt(dot(v,v))
+    l = len(norm)
+    norm = norm.reshape((l,1))
+    #norm = reshapeRow(norm)
+    for i in range(l):
         if norm[i]!=0:
             uv[i] = v[i]/norm[i]
 
-    return uv
+    return uv.reshape((sh[0],sh[1],2))
 @njit
 def reshapeRow(v):
     l = len(v)
@@ -91,7 +123,8 @@ def reshapeRow(v):
     for i in range(l):
         new[i,0] = v[i]
     return new
-
+#@njit
+#def re
 def g(dist, r, dr):
     global L
 
@@ -115,17 +148,20 @@ def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posicion
     stocastic = np.random.normal(scale=1, size=(Nv+Nb,2))
     stocasticR = np.random.uniform(-np.pi, np.pi, size=Nv+Nb)
     
-    tree = cKDTree(pos,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
-    dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
-    dist = dist.toarray()
-    #LJ = totalPairForce(pos, dist)
-    
-    #pos[:Nv,0] += stocastic[:Nv,0]*(2*D*deltat)**(1/2)+stocastic[-Nb:,0]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,0] #Actualizacion de la posicion en X de las particulas
-    #pos[:Nv,1] += stocastic[:Nv,1]*(2*D*deltat)**(1/2)+stocastic[-Nb:,1]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,1] #                             en Y
-    
     orient[:Nv] += stocasticR[:Nv]*stocRV
     orient[-Nb:] += stocasticR[-Nb:]*stocRB
     orient = np.clip(orient, -np.pi, np.pi)
+    ev = np.zeros((Nv, 2))
+    ev[:,0] = np.cos(orient(:Nv))
+    ev[:,1] = np.sin(orient(:Nv))
+
+    tree = cKDTree(pos,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
+    dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
+    dist = dist.toarray()
+    #LJ = totalPairForce(pos, dist, ev)
+    
+    #pos[:Nv,0] += stocastic[:Nv,0]*(2*D*deltat)**(1/2)+stocastic[-Nb:,0]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,0] #Actualizacion de la posicion en X de las particulas
+    #pos[:Nv,1] += stocastic[:Nv,1]*(2*D*deltat)**(1/2)+stocastic[-Nb:,1]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,1] #                             en Y
 
     pos[:Nv,0] += stocastic[:Nv,0]*stocV# + frcV*LJ[:Nv,0] #Actualizacion de la posicion en X de las particulas
     pos[:Nv,1] += stocastic[:Nv,1]*stocV# + frcV*LJ[:Nv,1] #                             en Y
@@ -151,9 +187,9 @@ def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posicion
         
     count += 1
 
-    #brv.set_offsets(pos[:Nv])
+    brv.set_offsets(pos[:Nv])
     brb.set_offsets(pos[-Nb:])
-    return brb,# brb,
+    return brb, brv,
 
 "------------------------------------------------------------------------"
 # [thsigmav t+1]=arg(suma exp(i [thsigmav t]) )+[sigmav][chi]
@@ -167,11 +203,13 @@ inter = 5 #Iteraciones para el guardado de posiciones
 iterations = 20000 #Numero de cuadros
 
 T = 1.0 #Temperatura
+eps = 1 #Constante electrica
 
 sigmav = 1 #Diametro de los virus
 phiv = .05 #packing fraction virus
 #Nv = int(rhov*L**2) #Numero de particulas
-Nv = 1000
+Nv = 500
+qv = 1 #Carga electrica
 rhov = 4*phiv/(np.pi*sigmav**2) #Densidad de particulas
 D = .077 #Coeficiente de difusion virus
 Drv = 3*D/sigmav**2 #Coeficiente de difusion orientacional virus
@@ -180,8 +218,9 @@ stocRV = (2*Drv*deltat)**(1/2) #Magnitud del termino estocastico rotacional (vir
 frcV = deltat*D/T #Factor de terminos de interacciones isotropa y anisotropa
 
 sigmab = 10 #Diametro de las bacterias
+qb = 1 #Carga electrica
 phib = .05 #packing fraction bacterias
-Nb = 10
+Nb = 50
 Db = .077 #Coeficiente de difusion bacteria
 Drb = 3*D/sigmab**2 #Coeficiente de difusion orientacional virus
 stocB = (2*Db*deltat)**(1/2) #Magnitud del termino estocastico (bacteria)
@@ -210,8 +249,9 @@ orient = np.random.uniform(-np.pi, np.pi, size=Nv+Nb) #Orientacion de las partic
 fig, ax= plt.subplots(figsize=(6,6)) #Creacion de la figura y subtrama
 ax.set_xlim([0,L])
 ax.set_ylim([0,L])
-#brv = ax.scatter(posv[:Nv,0],posv[:Nv,1])
-brb = ax.scatter(posv[-Nb:,0],posv[-Nb:,1])
+
+brv = ax.scatter(posv[:Nv,0],posv[:Nv,1], s=sigmav*10)
+brb = ax.scatter(posv[-Nb:,0],posv[-Nb:,1], s=sigmab*10)
 
 '================================================================================================'
 'ANIMACIoN'
