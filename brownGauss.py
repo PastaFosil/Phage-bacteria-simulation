@@ -42,9 +42,9 @@ def totalPairForce(pos, dist, ev):
     #tree = cKDTree(posv,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
     #dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
     #dist = dist.toarray()
-    
-    XYdist = np.ones((pos.shape[0],pos.shape[0],2))*pos #Posiciones de todas las particulas (un conjunto para cada particula)
-    ref = np.ones((pos.shape[0],pos.shape[0],2)) #Posiciones repetidas (cada conjunto ayudara a calcular las componentes de la distancia de una particula dada a todas las demas)
+    sh = pos.shape
+    XYdist = np.ones((sh[0],sh[0],2))*pos #Posiciones de todas las particulas (un conjunto para cada particula)
+    ref = np.ones((sh[0],sh[0],2)) #Posiciones repetidas (cada conjunto ayudara a calcular las componentes de la distancia de una particula dada a todas las demas)
     #for i in range(pos.shape[0]): #Dandole valores a los grupos de ref
     #    ref[i] *= pos[i]
     ref = duplicatePosition(ref, pos)
@@ -55,7 +55,7 @@ def totalPairForce(pos, dist, ev):
     mImgDist = ref-XYdist #Distancia entre pares (dirigido hacia particula de referencia)
     mImgDist = mImgDist - np.round_(mImgDist/L)*L #Distancia de minima imagen (vectores directores entre pares)
     unit = unitVector(mImgDist)
-    dotFactor = dot(unit, ev)
+    dotFactor = dot(unit, np.array([ev]*sh[0]))
     dotFactor = checkOrient(dotFactor)
 
     forceWCA = wca(dist[:Nv, :Nv]) #Fuerza debida a WCA (sobre los virus)
@@ -79,15 +79,27 @@ def checkOrient(u):
     return u
 @njit
 def dot(v1, v2):
-    if v1.ndim==3:
+    return v1[:,0]*v2[:,0] + v1[:,1]*v2[:,1]
+@njit
+def dotVectorGroups(v1,v2):
+    sh = np.shape(v1)
+    v1 = v1.reshape((sh[0]*sh[1],2))
+    v2 = v2.reshape((sh[0]*sh[1],2))
+    d = v1[:,0]*v2[:,0] + v1[:,1]*v2[:,1]
+    return d.reshape((sh[0],sh[1],1))
+
+@njit
+def dd(v1, v2):
+    if v1.ndim==2:
+        d = v1[:,0]*v2[:,0] + v1[:,1]*v2[:,1]
+    else:
         sh = np.shape(v1)
         v1 = v1.reshape((sh[0]*sh[1],2))
         v2 = v2.reshape((sh[0]*sh[1],2))
         d = v1[:,0]*v2[:,0] + v1[:,1]*v2[:,1]
-        d = d.reshape((sh[0],sh[1],1))
-    elif v2.ndim==2:
-        d = v1[:,0]*v2[:,0] + v1[:,1]*v2[:,1]
+        #d = reshapeRow(d, sh)
     return d
+
 
 @njit
 def duplicatePosition(ref, pos):
@@ -117,11 +129,11 @@ def unitVector(v):
 
     return uv.reshape((sh[0],sh[1],2))
 @njit
-def reshapeRow(v):
-    l = len(v)
-    new = np.zeros((l,1))
-    for i in range(l):
-        new[i,0] = v[i]
+def reshapeRow(v, sh):
+    new = np.zeros((sh[0],sh[1],1))
+    for g in range(sh[0]):
+        for vec in range(sh[1]):
+            new[g,vec] = v[g+vec,0]
     return new
 #@njit
 #def re
