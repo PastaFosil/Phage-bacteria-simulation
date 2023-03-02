@@ -32,7 +32,7 @@ def wca(r_ij):
 def electrostatic(r_ij):
     global eps, qv, qb
     mask = r_ij!=0
-    r_ij[mask] = -eps*qv*qb/r_ij[mask]
+    r_ij[mask] = -eps*qv*qb/(r_ij[mask]**2)
 
     return r_ij
 
@@ -52,52 +52,45 @@ def totalPairForce(pos, dist, ev):
     XYdist[dist==0] = [0,0] #Ignorar las que estan fuera de la distancia de corte
     ref[dist==0] = [0,0] 
 
-    mImgDist = ref-XYdist #Distancia entre pares (dirigido hacia particula de referencia)
+    mImgDist = ref-XYdist #Vector entre pares (dirigido hacia particula de referencia)
     mImgDist = mImgDist - np.round_(mImgDist/L)*L #Distancia de minima imagen (vectores directores entre pares)
-    unit = unitVector(mImgDist)
-    dotFactor = dot(unit, np.array([ev]*sh[0]))
-    dotFactor = checkOrient(dotFactor)
+    unit = -unitVector(mImgDist[-Nb:,:Nv]) #Vector unitario entre pares (saliendo de las bacterias)
+    dotFactor = dot(unit, np.array([ev]*Nb)) #Producto de vectores unitarios bacteria-virus con la orientación de los virus
+    dotFactor = checkOrient(dotFactor) #Anulación de los productos con dot(ev,eb) >= 0
 
     forceWCA = wca(dist[:Nv, :Nv]) #Fuerza debida a WCA (sobre los virus)
-    
+
     #forceElectro = np.zeros(mImgDist.shape)
     #forceElectro[-Nb:, :Nv] = np.ones((Nb,Nv))*mImgDist[-Nb:, :Nv]
     forceElectro = electrostatic(dist[-Nb:, :Nv])
-    forceElectro[:Nv, -Nb:] = -forceElectro[-Nb:, :Nv].T
+    print(forceElectro)
+    #forceElectro[:Nv, -Nb:] = -forceElectro[-Nb:, :Nv].T
     #forceElectro[:Nv, -Nb:] = mImgDist[:Nv, -Nb:]
     
     mImgDist[:Nv, :Nv] *= np.transpose(np.array([forceWCA,]*2))
-    mImgDist[-Nb:, :Nv] *= np.transpose(np.array([forceElectro,]*2))
-    mImgDist[:Nv, -Nb:] *= np.transpose(np.array([-np.transpose(forceElectro),]*2))
+    mImgDist[-Nb:, :Nv] = np.transpose(np.array([forceElectro,]*2),axes=[1,2,0])*unit*dotFactor
+    mImgDist[:Nv, -Nb:] = -np.transpose(mImgDist[-Nb:, :Nv],axes=[1,0,2])
     
     return np.sum(mImgDist, axis = 1)
 @njit
 def checkOrient(u):
-    for i in range(len(u)):
-        if u[i]>=0:
-            u[i] = 0
+    sh = np.shape(u)
+    for g in range(sh[0]):
+        for v in range(sh[1]):
+            if u[g,v,0]>=0.:
+                u[g,v,0] = 0.
     return u
-@njit
-def dot(v1, v2):
-    return v1[:,0]*v2[:,0] + v1[:,1]*v2[:,1]
-@njit
-def dotVectorGroups(v1,v2):
-    sh = np.shape(v1)
-    v1 = v1.reshape((sh[0]*sh[1],2))
-    v2 = v2.reshape((sh[0]*sh[1],2))
-    d = v1[:,0]*v2[:,0] + v1[:,1]*v2[:,1]
-    return d.reshape((sh[0],sh[1],1))
 
 @njit
-def dd(v1, v2):
+def dot(v1, v2):
     if v1.ndim==2:
-        d = v1[:,0]*v2[:,0] + v1[:,1]*v2[:,1]
+        d = v1[:,0]*v2[:,0] + v1[:,1]*v2[:,1] #producto escalar de arreglo de vectores de Nx2
     else:
-        sh = np.shape(v1)
-        v1 = v1.reshape((sh[0]*sh[1],2))
-        v2 = v2.reshape((sh[0]*sh[1],2))
-        d = v1[:,0]*v2[:,0] + v1[:,1]*v2[:,1]
-        #d = reshapeRow(d, sh)
+        sh = np.shape(v1) #arreglo de vectores NxNx2
+        d = np.array([0.])
+        for i in range(np.shape(v1)[0]):
+            d = np.append(d, dot(v1[i],v2[i])) #arreglo unidimensional de los productos
+        return d[1:].reshape((sh[0],sh[1],1)) #devolucion de arreglo NxNx1
     return d
 
 
@@ -115,19 +108,24 @@ def MSD(pos_0, pos_t):
 
 @njit
 def unitVector(v):
-    sh = np.shape(v)
-    v = v.reshape((sh[0]*sh[1],2))
-    uv = np.zeros((sh[0]*sh[1],2))
-    #norm = np.sqrt(dot(v)[np.newaxis].T)
-    norm = np.sqrt(dot(v,v))
-    l = len(norm)
-    norm = norm.reshape((l,1))
-    #norm = reshapeRow(norm)
-    for i in range(l):
-        if norm[i]!=0:
-            uv[i] = v[i]/norm[i]
+    if v.ndim==2:
+        norm = np.sqrt(dot(v,v))
+        l = len(norm)
+        norm = norm.reshape((l,1))
+        #norm = reshapeRow(norm)
+        for i in range(l):
+            if norm[i]!=0:
+                v[i] = v[i]/norm[i]
+    else:
+        sh = np.shape(v)
+        d = np.array([[0.,0.]])
+        for i in range(sh[0]):
+            d = np.append(d, unitVector(v[i]), axis=0) #arreglo unidimensional de los productos
+        return d[1:].reshape(sh) #devolucion de arreglo NxNx1
 
-    return uv.reshape((sh[0],sh[1],2))
+        v = v.reshape((sh[0]*sh[1],2))
+    #norm = np.sqrt(dot(v)[np.newaxis].T)
+    return v
 @njit
 def reshapeRow(v, sh):
     new = np.zeros((sh[0],sh[1],1))
@@ -159,32 +157,32 @@ def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posicion
     #print('posv', posv)
     stocastic = np.random.normal(scale=1, size=(Nv+Nb,2))
     stocasticR = np.random.uniform(-np.pi, np.pi, size=Nv+Nb)
-    
+
     orient[:Nv] += stocasticR[:Nv]*stocRV
     orient[-Nb:] += stocasticR[-Nb:]*stocRB
     orient = np.clip(orient, -np.pi, np.pi)
     ev = np.zeros((Nv, 2))
-    ev[:,0] = np.cos(orient(:Nv))
-    ev[:,1] = np.sin(orient(:Nv))
+    ev[:,0] = np.cos(orient[:Nv])
+    ev[:,1] = np.sin(orient[:Nv])
 
     tree = cKDTree(pos,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
     dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
     dist = dist.toarray()
-    #LJ = totalPairForce(pos, dist, ev)
+    LJ = totalPairForce(pos, dist, ev)
     
     #pos[:Nv,0] += stocastic[:Nv,0]*(2*D*deltat)**(1/2)+stocastic[-Nb:,0]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,0] #Actualizacion de la posicion en X de las particulas
     #pos[:Nv,1] += stocastic[:Nv,1]*(2*D*deltat)**(1/2)+stocastic[-Nb:,1]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,1] #                             en Y
 
-    pos[:Nv,0] += stocastic[:Nv,0]*stocV# + frcV*LJ[:Nv,0] #Actualizacion de la posicion en X de las particulas
-    pos[:Nv,1] += stocastic[:Nv,1]*stocV# + frcV*LJ[:Nv,1] #                             en Y
-    posNP[:Nv,0] += stocastic[:Nv,0]*stocV# + frcV*LJ[:,0]
-    posNP[:Nv,1] += stocastic[:Nv,1]*stocV# + frcV*LJ[:,1]
+    pos[:Nv,0] += stocastic[:Nv,0]*stocV + frcV*LJ[:Nv,0] #Actualizacion de la posicion en X de las particulas
+    pos[:Nv,1] += stocastic[:Nv,1]*stocV + frcV*LJ[:Nv,1] #                             en Y
+    posNP[:Nv,0] += stocastic[:Nv,0]*stocV + frcV*LJ[:Nv,0]
+    posNP[:Nv,1] += stocastic[:Nv,1]*stocV + frcV*LJ[:Nv,1]
 
-    print(orient[-Nb:])
-    pos[-Nb:,0] += stocastic[-Nb:,0]*stocB + frcB*np.cos(orient[-Nb:])
-    pos[-Nb:,1] += stocastic[-Nb:,1]*stocB + frcB*np.sin(orient[-Nb:])
-    posNP[-Nb:,0] += stocastic[-Nb:,0]*stocB + frcB*np.cos(orient[-Nb:])
-    posNP[-Nb:,1] += stocastic[-Nb:,1]*stocB + frcB*np.sin(orient[-Nb:])
+    #print(orient[-Nb:])
+    pos[-Nb:,0] += stocastic[-Nb:,0]*stocB + frcB*np.cos(orient[-Nb:]) + frcB*LJ[-Nb:,0]
+    pos[-Nb:,1] += stocastic[-Nb:,1]*stocB + frcB*np.sin(orient[-Nb:]) + frcB*LJ[-Nb:,1]
+    posNP[-Nb:,0] += stocastic[-Nb:,0]*stocB + frcB*np.cos(orient[-Nb:]) + frcB*LJ[-Nb:,0]
+    posNP[-Nb:,1] += stocastic[-Nb:,1]*stocB + frcB*np.sin(orient[-Nb:]) + frcB*LJ[-Nb:,1]
     #posNP[:,0] += stocastic[:,0]*(2*D*deltat)**(1/2)
     
     #posNP[:,1] += stocastic[:,1]*(2*D*deltat)**(1/2)
@@ -216,13 +214,14 @@ iterations = 20000 #Numero de cuadros
 
 T = 1.0 #Temperatura
 eps = 1 #Constante electrica
+#L = 30.0 #Tamano de la caja
 
 sigmav = 1 #Diametro de los virus
 phiv = .05 #packing fraction virus
-#Nv = int(rhov*L**2) #Numero de particulas
-Nv = 500
-qv = 1 #Carga electrica
 rhov = 4*phiv/(np.pi*sigmav**2) #Densidad de particulas
+#Nv = int(rhov*L**2) #Numero de particulas
+Nv = 1000
+qv = 1 #Carga electrica
 D = .077 #Coeficiente de difusion virus
 Drv = 3*D/sigmav**2 #Coeficiente de difusion orientacional virus
 stocV = (2*D*deltat)**(1/2) #Magnitud del termino estocastico (virus)
@@ -239,14 +238,14 @@ stocB = (2*Db*deltat)**(1/2) #Magnitud del termino estocastico (bacteria)
 stocRB = (2*Drb*deltat)**(1/2) #Magnitud del termino estocastico rotacional (bacteria)
 frcB = deltat*Db/T #Factor de terminos de autopropulsion e interaccion anisotropa
 
-rc = sigmav*2**(1/6) #Radio de corte
-#L = 30.0 #Tamano de la caja
 L = np.sqrt(Nv*np.pi/(4*phiv))
+rc = sigmav*2**(1/6) #Radio de corte
 print(" Nv %s\n Nb %s" % (Nv, Nb))
 
 '================================================================================================'
 'CONFIGURACIoN INICIAL'
 
+#pos = np.array([[1.1,1.4],[2.1,1.],[2.,1.9]])
 posv = np.random.uniform(sigmav/2,L-sigmav/2,size=(Nv,2)) #Arreglo de la posicion de las particulas
 posv = changePos(posv) #Eliminacion de solapamiento
 
