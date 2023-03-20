@@ -19,6 +19,40 @@ def changePos(posv):
         k += 1
     return posv
 
+@jit
+def uniquePos(Nv, Nb, sigmav, sigmab, L):
+    refv = 4.*sigmav*sigmav
+    refb = 4.*sigmab*sigmab
+    pos = np.random.uniform(sigmav/2,L-sigmav/2,size=(Nv+Nb,2))
+    for i in range(Nv-1):
+        avant = 0
+        count = 0
+        while avant==0.:
+            avant = 1.
+            print("i: ", i)
+            xaux = np.random.uniform(sigmav/2.,L-sigmav/2.,size=2)
+            for j in range(i+1):
+                """
+                ==========================
+                PROBLEMAS AQUI
+                ==========================
+                """
+                print(j)
+                d = pos[j]-xaux
+                if np.dot(d,d)<refv:
+                    avant = 0
+        pos[i+1] = xaux
+    for i in range(Nb):
+        avant = 0
+        while avant==0.:
+            avant = 1.
+            xaux = np.random.uniform(sigmab/2.,L-sigmab/2.,size=2)
+            for j in range(Nv+i):
+                d = pos[j]-xaux
+                if np.dot(d,d)<refb:
+                    avant = 0
+        pos[Nv+i+1] = xaux
+    return pos
 #@jit
 def wca(r_ij):
     global sigmav
@@ -54,16 +88,15 @@ def totalPairForce(pos, dist, ev):
 
     mImgDist = ref-XYdist #Vector entre pares (dirigido hacia particula de referencia)
     mImgDist = mImgDist - np.round_(mImgDist/L)*L #Distancia de minima imagen (vectores directores entre pares)
-    unit = -unitVector(mImgDist[-Nb:,:Nv]) #Vector unitario entre pares (saliendo de las bacterias)
+    unit = unitVector(mImgDist[-Nb:,:Nv]) #Vector unitario entre pares (saliendo de las bacterias)
     dotFactor = dot(unit, np.array([ev]*Nb)) #Producto de vectores unitarios bacteria-virus con la orientación de los virus
     dotFactor = checkOrient(dotFactor) #Anulación de los productos con dot(ev,eb) >= 0
 
     forceWCA = wca(dist[:Nv, :Nv]) #Fuerza debida a WCA (sobre los virus)
-
+    print(np.max(forceWCA))
     #forceElectro = np.zeros(mImgDist.shape)
     #forceElectro[-Nb:, :Nv] = np.ones((Nb,Nv))*mImgDist[-Nb:, :Nv]
     forceElectro = electrostatic(dist[-Nb:, :Nv])
-    print(forceElectro)
     #forceElectro[:Nv, -Nb:] = -forceElectro[-Nb:, :Nv].T
     #forceElectro[:Nv, -Nb:] = mImgDist[:Nv, -Nb:]
     
@@ -77,7 +110,7 @@ def checkOrient(u):
     sh = np.shape(u)
     for g in range(sh[0]):
         for v in range(sh[1]):
-            if u[g,v,0]>=0.:
+            if u[g,v,0]<0.:
                 u[g,v,0] = 0.
     return u
 
@@ -153,6 +186,7 @@ def g(dist, r, dr):
 def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posiciones y orientaciones
     global L,sigmav, count, posT, posv, posNP, orient
 
+    print('t=', count*deltat)
     #print(count)
     #print('posv', posv)
     stocastic = np.random.normal(scale=1, size=(Nv+Nb,2))
@@ -168,6 +202,7 @@ def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posicion
     tree = cKDTree(pos,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
     dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
     dist = dist.toarray()
+    print("MIN DIST: ", np.where(dist<sigmav))
     LJ = totalPairForce(pos, dist, ev)
     
     #pos[:Nv,0] += stocastic[:Nv,0]*(2*D*deltat)**(1/2)+stocastic[-Nb:,0]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,0] #Actualizacion de la posicion en X de las particulas
@@ -186,8 +221,6 @@ def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posicion
     #posNP[:,0] += stocastic[:,0]*(2*D*deltat)**(1/2)
     
     #posNP[:,1] += stocastic[:,1]*(2*D*deltat)**(1/2)
-    
-    print('t=', count*deltat)
     
     pos[pos>L] -= L #Circulacion de la posicion de las particulas que se salen de la caja
     pos[pos<0] += L
@@ -246,6 +279,7 @@ print(" Nv %s\n Nb %s" % (Nv, Nb))
 'CONFIGURACIoN INICIAL'
 
 #pos = np.array([[1.1,1.4],[2.1,1.],[2.,1.9]])
+"""
 posv = np.random.uniform(sigmav/2,L-sigmav/2,size=(Nv,2)) #Arreglo de la posicion de las particulas
 posv = changePos(posv) #Eliminacion de solapamiento
 
@@ -253,6 +287,8 @@ posb = np.random.uniform(sigmab/2,L-sigmab/2,size=(Nb,2)) #Arreglo de la posicio
 posb = changePos(posb) #Eliminacion de solapamiento
 
 pos = np.append(posv, posb, axis=0) #posicion de las particulas (virus y bacterias)
+"""
+pos = uniquePos(Nv, Nb, sigmav, sigmab, L)
 posNP = np.ones(shape=(Nv+Nb, 2))*pos #Posicion sin condiciones periodicas de frontera
 posT = np.array([pos]) #Posicion al tiempo t
 orient = np.random.uniform(-np.pi, np.pi, size=Nv+Nb) #Orientacion de las particulas
@@ -261,8 +297,8 @@ fig, ax= plt.subplots(figsize=(6,6)) #Creacion de la figura y subtrama
 ax.set_xlim([0,L])
 ax.set_ylim([0,L])
 
-brv = ax.scatter(posv[:Nv,0],posv[:Nv,1], s=sigmav*10)
-brb = ax.scatter(posv[-Nb:,0],posv[-Nb:,1], s=sigmab*10)
+brv = ax.scatter(pos[:Nv,0],pos[:Nv,1], s=sigmav*10)
+brb = ax.scatter(pos[-Nb:,0],pos[-Nb:,1], s=sigmab*10)
 
 '================================================================================================'
 'ANIMACIoN'
