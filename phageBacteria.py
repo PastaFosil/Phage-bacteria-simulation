@@ -19,43 +19,46 @@ def changePos(posv):
         k += 1
     return posv
 
-@jit
+#@jit
 def uniquePos(Nv, Nb, sigmav, sigmab, L):
     refv = 4.*sigmav*sigmav
     refb = 4.*sigmab*sigmab
-    pos = np.random.uniform(sigmav/2,L-sigmav/2,size=(Nv+Nb,2))
-    for i in range(Nv-1):
+    pos = np.random.uniform(sigmav/2,L-sigmav/2,size=(1,2))
+    for i in range(1,Nv):
         avant = 0
         count = 0
         while avant==0.:
             avant = 1.
-            print("i: ", i)
-            xaux = np.random.uniform(sigmav/2.,L-sigmav/2.,size=2)
-            for j in range(i+1):
-                """
-                ==========================
-                PROBLEMAS AQUI
-                ==========================
-                """
-                print(j)
-                d = pos[j]-xaux
+            xaux = np.random.uniform(sigmav/2.,L-sigmav/2.,size=(1,2))
+            for j in range(i):
+                d = pos[j]-xaux[0]
                 if np.dot(d,d)<refv:
                     avant = 0
-        pos[i+1] = xaux
+        pos = np.append(pos,xaux,axis=0)
+
+    fig, ax= plt.subplots(figsize=(6,6)) #Creacion de la figura y subtrama
+    ax.set_xlim([0,L])
+    ax.set_ylim([0,L])
+
+    brv = ax.scatter(pos[:Nv,0],pos[:Nv,1], s=sigmav*10)
+    plt.show()
     for i in range(Nb):
         avant = 0
         while avant==0.:
+            print("ii: ", i)
             avant = 1.
-            xaux = np.random.uniform(sigmab/2.,L-sigmab/2.,size=2)
+            xaux = np.random.uniform(sigmav/2.,L-sigmav/2.,size=(1,2))
             for j in range(Nv+i):
-                d = pos[j]-xaux
+                #print(j)
+                d = pos[j]-xaux[0]
                 if np.dot(d,d)<refb:
                     avant = 0
-        pos[Nv+i+1] = xaux
+        pos = np.append(pos,xaux,axis=0)
+        print("if: ", i)
     return pos
+
 #@jit
-def wca(r_ij):
-    global sigmav
+def wca(r_ij, sigma):
     r_ij = r_ij.astype(np.float64)
 
     mask = r_ij!=0
@@ -72,7 +75,8 @@ def electrostatic(r_ij):
 
 #@jit
 def totalPairForce(pos, dist, ev):
-    global sigmav, L
+    global sigmav, L, sigmab, sigmav
+    sigmabv = sigmav/2 + sigmab/2
     #tree = cKDTree(posv,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
     #dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
     #dist = dist.toarray()
@@ -92,17 +96,19 @@ def totalPairForce(pos, dist, ev):
     dotFactor = dot(unit, np.array([ev]*Nb)) #Producto de vectores unitarios bacteria-virus con la orientación de los virus
     dotFactor = checkOrient(dotFactor) #Anulación de los productos con dot(ev,eb) >= 0
 
-    forceWCA = wca(dist[:Nv, :Nv]) #Fuerza debida a WCA (sobre los virus)
-    print(np.max(forceWCA))
+    forceWCAvv = wca(dist[:Nv, :Nv], sigmav) #Fuerza debida a WCA (sobre los virus)
+    #print(np.max(forceWCA))
     #forceElectro = np.zeros(mImgDist.shape)
     #forceElectro[-Nb:, :Nv] = np.ones((Nb,Nv))*mImgDist[-Nb:, :Nv]
-    forceElectro = electrostatic(dist[-Nb:, :Nv])
+    forceWCAbv = wca(dist[-Nb:, :Nv], sigmabv)
+    forceWCAbb = wca(dist[-Nb:, -Nb:], sigmab)
     #forceElectro[:Nv, -Nb:] = -forceElectro[-Nb:, :Nv].T
     #forceElectro[:Nv, -Nb:] = mImgDist[:Nv, -Nb:]
     
-    mImgDist[:Nv, :Nv] *= np.transpose(np.array([forceWCA,]*2))
-    mImgDist[-Nb:, :Nv] = np.transpose(np.array([forceElectro,]*2),axes=[1,2,0])*unit*dotFactor
+    mImgDist[:Nv, :Nv] *= np.transpose(np.array([forceWCAvv,]*2))
+    mImgDist[-Nb:, :Nv] *= np.transpose(np.array([forceWCAbv,]*2),axes=[1,2,0])
     mImgDist[:Nv, -Nb:] = -np.transpose(mImgDist[-Nb:, :Nv],axes=[1,0,2])
+    mImgDist[-Nb:, -Nb:] *= np.transpose(np.array([forceWCAbb,]*2))
     
     return np.sum(mImgDist, axis = 1)
 @njit
@@ -202,7 +208,7 @@ def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posicion
     tree = cKDTree(pos,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
     dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
     dist = dist.toarray()
-    print("MIN DIST: ", np.where(dist<sigmav))
+    print(np.where(dist<sigmav))
     LJ = totalPairForce(pos, dist, ev)
     
     #pos[:Nv,0] += stocastic[:Nv,0]*(2*D*deltat)**(1/2)+stocastic[-Nb:,0]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,0] #Actualizacion de la posicion en X de las particulas
@@ -271,7 +277,8 @@ stocB = (2*Db*deltat)**(1/2) #Magnitud del termino estocastico (bacteria)
 stocRB = (2*Drb*deltat)**(1/2) #Magnitud del termino estocastico rotacional (bacteria)
 frcB = deltat*Db/T #Factor de terminos de autopropulsion e interaccion anisotropa
 
-L = np.sqrt(Nv*np.pi/(4*phiv))
+#L = np.sqrt(1.5*Nv*np.pi/(4*phiv))
+L = 1000
 rc = sigmav*2**(1/6) #Radio de corte
 print(" Nv %s\n Nb %s" % (Nv, Nb))
 
@@ -288,6 +295,7 @@ posb = changePos(posb) #Eliminacion de solapamiento
 
 pos = np.append(posv, posb, axis=0) #posicion de las particulas (virus y bacterias)
 """
+
 pos = uniquePos(Nv, Nb, sigmav, sigmab, L)
 posNP = np.ones(shape=(Nv+Nb, 2))*pos #Posicion sin condiciones periodicas de frontera
 posT = np.array([pos]) #Posicion al tiempo t
@@ -393,7 +401,7 @@ np.save(file, data)
 file.close
 """
 
-f, (a1,a2,a3) = plt.subplots(1,3)
+f, (a1,a2) = plt.subplots(1,2)
 
 lin = np.polyfit(temp, pMSD, 1)
 lin_model_sim = np.poly1d(lin)
@@ -420,7 +428,7 @@ a2.set_ylabel('MSD')
 
 a2.plot(temp, lin_model_sim(temp),color='g')
 a2.plot(temp, lin_model_an(temp),color = 'r')
-
+"""
 lin = np.polyfit(temp, pMSDb, 1)
 lin_model_sim = np.poly1d(lin)
 lin_model_an = np.poly1d([4*Db, lin[1]])
@@ -432,7 +440,7 @@ a3.set_ylabel('MSD')
 
 a3.plot(temp, lin_model_sim(temp),color='g')
 a3.plot(temp, lin_model_an(temp),color = 'r')
-
+"""
 plt.show()
 '''
 #print(posT)
