@@ -4,21 +4,6 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from numba import jit, njit
 
-def changePos(posv):
-    tree = cKDTree(posv,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
-    dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
-    dist = dist.toarray() #Matriz en formato np.array
-    k = 0
-    while np.any(dist[dist<sigmav]) == True:
-        reassign = np.where(np.logical_and(np.triu(dist)<1, np.triu(dist)>0))
-        for i in reassign[0]:
-            posv[i] = np.random.uniform(sigmav/2, L-sigmav/2, size = 2)
-        tree = cKDTree(posv,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
-        dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
-        dist = dist.toarray()
-        k += 1
-    return posv
-
 #@jit
 def uniquePos(Nv, Nb, sigmav, sigmab, L):
     refv = 4.*sigmav*sigmav
@@ -26,7 +11,7 @@ def uniquePos(Nv, Nb, sigmav, sigmab, L):
     pos = np.random.uniform(sigmav/2,L-sigmav/2,size=(1,2))
     for i in range(1,Nv):
         avant = 0
-        count = 0
+        i = 0
         while avant==0.:
             avant = 1.
             xaux = np.random.uniform(sigmav/2.,L-sigmav/2.,size=(1,2))
@@ -36,25 +21,17 @@ def uniquePos(Nv, Nb, sigmav, sigmab, L):
                     avant = 0
         pos = np.append(pos,xaux,axis=0)
 
-    fig, ax= plt.subplots(figsize=(6,6)) #Creacion de la figura y subtrama
-    ax.set_xlim([0,L])
-    ax.set_ylim([0,L])
 
-    brv = ax.scatter(pos[:Nv,0],pos[:Nv,1], s=sigmav*10)
-    plt.show()
-    for i in range(Nb):
+    for i in range(1,Nb):
         avant = 0
         while avant==0.:
-            print("ii: ", i)
             avant = 1.
             xaux = np.random.uniform(sigmav/2.,L-sigmav/2.,size=(1,2))
             for j in range(Nv+i):
-                #print(j)
                 d = pos[j]-xaux[0]
                 if np.dot(d,d)<refb:
                     avant = 0
         pos = np.append(pos,xaux,axis=0)
-        print("if: ", i)
     return pos
 
 #@jit
@@ -65,18 +42,22 @@ def wca(r_ij, sigma):
     r_ij[mask] = (48/r_ij[mask])*((sigmav/r_ij[mask])**12-.5*(sigmav/r_ij[mask])**6)
 
     return r_ij
-
+"""
 def electrostatic(r_ij):
     global eps, qv, qb
     mask = r_ij!=0
     r_ij[mask] = -eps*qv*qb/(r_ij[mask]**2)
 
     return r_ij
-
+"""
 #@jit
 def totalPairForce(pos, dist, ev):
-    global sigmav, L, sigmab, sigmav
+    global sigmav, L, sigmab, sigmav, rcFactor
     sigmabv = sigmav/2 + sigmab/2
+
+    dist[:Nv,:Nv][dist[:Nv,:Nv]>rcFactor*sigmav] = 0
+    dist[-Nb:,:Nv][dist[-Nb:,:Nv]>rcFactor*sigmabv] = 0
+    dist[:Nv,-Nb:] = dist[-Nb:,:Nv].T
     #tree = cKDTree(posv,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
     #dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
     #dist = dist.toarray()
@@ -106,7 +87,7 @@ def totalPairForce(pos, dist, ev):
     #forceElectro[:Nv, -Nb:] = mImgDist[:Nv, -Nb:]
     
     mImgDist[:Nv, :Nv] *= np.transpose(np.array([forceWCAvv,]*2))
-    mImgDist[-Nb:, :Nv] *= np.transpose(np.array([forceWCAbv,]*2),axes=[1,2,0])
+    mImgDist[-Nb:, :Nv] *= np.transpose(np.array([forceWCAbv,]*2),axes=[1,2,0])*dotFactor
     mImgDist[:Nv, -Nb:] = -np.transpose(mImgDist[-Nb:, :Nv],axes=[1,0,2])
     mImgDist[-Nb:, -Nb:] *= np.transpose(np.array([forceWCAbb,]*2))
     
@@ -184,16 +165,16 @@ def g(dist, r, dr):
         d = np.ones(dist.shape)*dist
         d[d<k[i]] = 0
         d[d>k[i+1]] = 0
-        k[i] = np.count_nonzero(d)
+        k[i] = np.i_nonzero(d)
     #print('k2: ', k)
     return k*(L/dist.shape[0])**2
 
 #def selfPropulsion()    
 def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posiciones y orientaciones
-    global L,sigmav, count, posT, posv, posNP, orient
+    global L, sigmav, sigmab, Fa, rcFactor, orient, posT
 
-    print('t=', count*deltat)
-    #print(count)
+    print('t=', i*deltat)
+    #print(i)
     #print('posv', posv)
     stocastic = np.random.normal(scale=1, size=(Nv+Nb,2))
     stocasticR = np.random.uniform(-np.pi, np.pi, size=Nv+Nb)
@@ -206,24 +187,24 @@ def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posicion
     ev[:,1] = np.sin(orient[:Nv])
 
     tree = cKDTree(pos,boxsize=[L,L]) #arbol de las particulas mas cercanas entre si
-    dist = tree.sparse_distance_matrix(tree, max_distance=rc,output_type='coo_matrix') #Matriz con los puntos mas cercanos
+    dist = tree.sparse_distance_matrix(tree, max_distance=rcFactor*np.max([sigmav,sigmab]),output_type='coo_matrix') #Matriz con los puntos mas cercanos
     dist = dist.toarray()
-    print(np.where(dist<sigmav))
-    LJ = totalPairForce(pos, dist, ev)
+    
+    #LJ = totalPairForce(pos, dist, ev)
     
     #pos[:Nv,0] += stocastic[:Nv,0]*(2*D*deltat)**(1/2)+stocastic[-Nb:,0]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,0] #Actualizacion de la posicion en X de las particulas
     #pos[:Nv,1] += stocastic[:Nv,1]*(2*D*deltat)**(1/2)+stocastic[-Nb:,1]*(2*Db*deltat)**(1/2)+(deltat*D/T)*LJ[:,1] #                             en Y
 
-    pos[:Nv,0] += stocastic[:Nv,0]*stocV + frcV*LJ[:Nv,0] #Actualizacion de la posicion en X de las particulas
-    pos[:Nv,1] += stocastic[:Nv,1]*stocV + frcV*LJ[:Nv,1] #                             en Y
-    posNP[:Nv,0] += stocastic[:Nv,0]*stocV + frcV*LJ[:Nv,0]
-    posNP[:Nv,1] += stocastic[:Nv,1]*stocV + frcV*LJ[:Nv,1]
+    pos[:Nv,0] += stocastic[:Nv,0]*stocV# + frcV*LJ[:Nv,0] #Actualizacion de la posicion en X de las particulas
+    pos[:Nv,1] += stocastic[:Nv,1]*stocV# + frcV*LJ[:Nv,1] #                             en Y
+    posNP[:Nv,0] += stocastic[:Nv,0]*stocV# + frcV*LJ[:Nv,0]
+    posNP[:Nv,1] += stocastic[:Nv,1]*stocV# + frcV*LJ[:Nv,1]
 
     #print(orient[-Nb:])
-    pos[-Nb:,0] += stocastic[-Nb:,0]*stocB + frcB*np.cos(orient[-Nb:]) + frcB*LJ[-Nb:,0]
-    pos[-Nb:,1] += stocastic[-Nb:,1]*stocB + frcB*np.sin(orient[-Nb:]) + frcB*LJ[-Nb:,1]
-    posNP[-Nb:,0] += stocastic[-Nb:,0]*stocB + frcB*np.cos(orient[-Nb:]) + frcB*LJ[-Nb:,0]
-    posNP[-Nb:,1] += stocastic[-Nb:,1]*stocB + frcB*np.sin(orient[-Nb:]) + frcB*LJ[-Nb:,1]
+    pos[-Nb:,0] += stocastic[-Nb:,0]*stocB + frcB*Fa*np.cos(orient[-Nb:])# + frcB*LJ[-Nb:,0]
+    pos[-Nb:,1] += stocastic[-Nb:,1]*stocB + frcB*Fa*np.sin(orient[-Nb:])# + frcB*LJ[-Nb:,1]
+    posNP[-Nb:,0] += stocastic[-Nb:,0]*stocB + frcB*Fa*np.cos(orient[-Nb:])# + frcB*LJ[-Nb:,0]
+    posNP[-Nb:,1] += stocastic[-Nb:,1]*stocB + frcB*Fa*np.sin(orient[-Nb:])# + frcB*LJ[-Nb:,1]
     #posNP[:,0] += stocastic[:,0]*(2*D*deltat)**(1/2)
     
     #posNP[:,1] += stocastic[:,1]*(2*D*deltat)**(1/2)
@@ -231,10 +212,10 @@ def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posicion
     pos[pos>L] -= L #Circulacion de la posicion de las particulas que se salen de la caja
     pos[pos<0] += L
 
-    if count%inter == 0:
-        posT = np.insert(posT, int(count/inter), posNP, axis=0)
+    if i%inter == 0:
+        posT = np.insert(posT, int(i/inter), posNP, axis=0)
         
-    count += 1
+    i += 1
 
     brv.set_offsets(pos[:Nv])
     brb.set_offsets(pos[-Nb:])
@@ -259,7 +240,7 @@ sigmav = 1 #Diametro de los virus
 phiv = .05 #packing fraction virus
 rhov = 4*phiv/(np.pi*sigmav**2) #Densidad de particulas
 #Nv = int(rhov*L**2) #Numero de particulas
-Nv = 1000
+Nv = 0
 qv = 1 #Carga electrica
 D = .077 #Coeficiente de difusion virus
 Drv = 3*D/sigmav**2 #Coeficiente de difusion orientacional virus
@@ -270,16 +251,17 @@ frcV = deltat*D/T #Factor de terminos de interacciones isotropa y anisotropa
 sigmab = 10 #Diametro de las bacterias
 qb = 1 #Carga electrica
 phib = .05 #packing fraction bacterias
-Nb = 50
+Nb = 1000
 Db = .077 #Coeficiente de difusion bacteria
 Drb = 3*D/sigmab**2 #Coeficiente de difusion orientacional virus
 stocB = (2*Db*deltat)**(1/2) #Magnitud del termino estocastico (bacteria)
 stocRB = (2*Drb*deltat)**(1/2) #Magnitud del termino estocastico rotacional (bacteria)
 frcB = deltat*Db/T #Factor de terminos de autopropulsion e interaccion anisotropa
-
+Fa = 10
 #L = np.sqrt(1.5*Nv*np.pi/(4*phiv))
 L = 1000
-rc = sigmav*2**(1/6) #Radio de corte
+rcFactor = 2**(1/6) #Radio de corte
+
 print(" Nv %s\n Nb %s" % (Nv, Nb))
 
 '================================================================================================'
@@ -311,10 +293,11 @@ brb = ax.scatter(pos[-Nb:,0],pos[-Nb:,1], s=sigmab*10)
 '================================================================================================'
 'ANIMACIoN'
 
-count = 1
+i = 1
 
 anim = FuncAnimation(fig,animate,frames=iterations,interval=1, blit=True, repeat=False) #Generacion de la animacion
 plt.show()
+#ACTUALIZACION CADA 1000 PASOS
 """
 for i in range(iterations):
     animate(i)
@@ -330,7 +313,7 @@ for i in range(10):
     posNPv = np.ones(shape=(Nv,2))*posv #Posicion sin condiciones periodicas de frontera
     posT = np.array([posv]) #Posicion al tiempo t
 
-    count = 1
+    i = 1
     for i in range(iterations):
         animate(i)
     
@@ -355,7 +338,7 @@ np.save(file, D_eff)
         posNPv = np.ones(shape=(Nv,2))*posv #Posicion sin condiciones periodicas de frontera
         posT = np.array([posv]) #Posicion al tiempo t
 
-        count = 1
+        i = 1
         #anim = FuncAnimation(fig,animate,frames=iterations,interval=1, blit=True, repeat=False) #Generacion de la animacion
         for i in range(iterations):
             animate(i)
@@ -388,7 +371,7 @@ pMSDtotal = np.array([])
 temp = np.array([])
 k = 0
 for t in posT:
-    pMSD = np.append(pMSD, MSD(posT[0,:Nv,:], t[:Nv,:]))
+    #pMSD = np.append(pMSD, MSD(posT[0,:Nv,:], t[:Nv,:]))
     pMSDb = np.append(pMSDb, MSD(posT[0,-Nb:,:], t[-Nb:,:]))
     pMSDtotal = np.append(pMSDtotal, MSD(posT[0], t))
     temp = np.append(temp, deltat*inter*(k+3))
@@ -402,7 +385,7 @@ file.close
 """
 
 f, (a1,a2) = plt.subplots(1,2)
-
+"""
 lin = np.polyfit(temp, pMSD, 1)
 lin_model_sim = np.poly1d(lin)
 lin_model_an = np.poly1d([4*D, lin[1]])
@@ -414,7 +397,7 @@ a1.set_ylabel('MSD')
 
 a1.plot(temp, lin_model_sim(temp),color='g')
 a1.plot(temp, lin_model_an(temp),color = 'r')
-
+"""
 
 
 lin = np.polyfit(temp, pMSDb, 1)
