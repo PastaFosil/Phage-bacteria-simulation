@@ -5,33 +5,21 @@ from matplotlib.animation import FuncAnimation
 from numba import jit, njit
 
 #@jit
-def uniquePos(Nv, Nb, sigmav, sigmab, L):
-    refv = 4.*sigmav*sigmav
-    refb = 4.*sigmab*sigmab
-    pos = np.random.uniform(sigmav/2,L-sigmav/2,size=(1,2))
-    for i in range(1,Nv):
+def uniquePos(Nv, Nb, sigma, L):
+    ref = 4.*sigma*sigma #distancia interparticula de referencia (diametro de la particula al cuadrado)
+    pos = np.random.uniform(sigma/2,L-sigma/2,size=(1,2)) #generacion de posicion de primera particula
+    for i in range(1,Nv+Nb-1): #generacion del resto de posiciones sin solapamiento
         avant = 0
         i = 0
-        while avant==0.:
+        while avant==0.: 
             avant = 1.
-            xaux = np.random.uniform(sigmav/2.,L-sigmav/2.,size=(1,2))
-            for j in range(i):
+            xaux = np.random.uniform(sigma/2.,L-sigma/2.,size=(1,2)) #generacion de nueva posicion candidata
+            for j in range(i): #determina si la particula candidata se solapa con alguna de las del arreglo
                 d = pos[j]-xaux[0]
-                if np.dot(d,d)<refv:
-                    avant = 0
+                if np.dot(d,d)<ref:
+                    avant = 0 #si no se solapa con ninguna, se sale del bucle y se agrega al arreglo
         pos = np.append(pos,xaux,axis=0)
 
-
-    for i in range(1,Nb):
-        avant = 0
-        while avant==0.:
-            avant = 1.
-            xaux = np.random.uniform(sigmav/2.,L-sigmav/2.,size=(1,2))
-            for j in range(Nv+i):
-                d = pos[j]-xaux[0]
-                if np.dot(d,d)<refb:
-                    avant = 0
-        pos = np.append(pos,xaux,axis=0)
     return pos
 
 #@jit
@@ -171,7 +159,7 @@ def g(dist, r, dr):
 
 #def selfPropulsion()    
 def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posiciones y orientaciones
-    global L, sigmav, sigmab, Fa, rcFactor, orient, posT
+    global L, sigmav, sigmab, Fa, rcFactor, orient, posT, updt
 
     print('t=', i*deltat)
     #print(i)
@@ -216,9 +204,11 @@ def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posicion
         posT = np.insert(posT, int(i/inter), posNP, axis=0)
         
     i += 1
-
-    brv.set_offsets(pos[:Nv])
-    brb.set_offsets(pos[-Nb:])
+    if i%updt==0:
+        brv.set_offsets(pos[:Nv])
+        brb.set_offsets(pos[-Nb:])
+        fig.canvas.draw_idle()
+        plt.pause(.1)
     return brb, brv,
 
 "------------------------------------------------------------------------"
@@ -230,11 +220,11 @@ def animate(i): #Funcion ejecutada en cada cuadro (actualizacion de las posicion
 
 deltat = 1e-4 #Intervalo de tiempo
 inter = 5 #Iteraciones para el guardado de posiciones
-iterations = 20000 #Numero de cuadros
+iterations = 100000 #Numero de cuadros
 
 T = 1.0 #Temperatura
 eps = 1 #Constante electrica
-#L = 30.0 #Tamano de la caja
+L = 1000.0 #Tamano de la caja
 
 sigmav = 1 #Diametro de los virus
 phiv = .05 #packing fraction virus
@@ -249,17 +239,20 @@ stocRV = (2*Drv*deltat)**(1/2) #Magnitud del termino estocastico rotacional (vir
 frcV = deltat*D/T #Factor de terminos de interacciones isotropa y anisotropa
 
 sigmab = 10 #Diametro de las bacterias
+phib = .5 #packing fraction bacterias
+rhob = 4*phib/(np.pi*sigmab**2) #Densidad de particulas
 qb = 1 #Carga electrica
 phib = .05 #packing fraction bacterias
-Nb = 1000
+Nb = int(rhob*L**2) #Numero de particulas
+#Nb = 1000
 Db = .077 #Coeficiente de difusion bacteria
 Drb = 3*D/sigmab**2 #Coeficiente de difusion orientacional virus
 stocB = (2*Db*deltat)**(1/2) #Magnitud del termino estocastico (bacteria)
 stocRB = (2*Drb*deltat)**(1/2) #Magnitud del termino estocastico rotacional (bacteria)
 frcB = deltat*Db/T #Factor de terminos de autopropulsion e interaccion anisotropa
-Fa = 10
+Fa = 20
 #L = np.sqrt(1.5*Nv*np.pi/(4*phiv))
-L = 1000
+#L = 1000
 rcFactor = 2**(1/6) #Radio de corte
 
 print(" Nv %s\n Nb %s" % (Nv, Nb))
@@ -283,6 +276,7 @@ posNP = np.ones(shape=(Nv+Nb, 2))*pos #Posicion sin condiciones periodicas de fr
 posT = np.array([pos]) #Posicion al tiempo t
 orient = np.random.uniform(-np.pi, np.pi, size=Nv+Nb) #Orientacion de las particulas
 
+plt.ion()
 fig, ax= plt.subplots(figsize=(6,6)) #Creacion de la figura y subtrama
 ax.set_xlim([0,L])
 ax.set_ylim([0,L])
@@ -294,14 +288,16 @@ brb = ax.scatter(pos[-Nb:,0],pos[-Nb:,1], s=sigmab*10)
 'ANIMACIoN'
 
 i = 1
-
+"""
 anim = FuncAnimation(fig,animate,frames=iterations,interval=1, blit=True, repeat=False) #Generacion de la animacion
 plt.show()
 #ACTUALIZACION CADA 1000 PASOS
 """
+updt = 1000
+plt.draw()
 for i in range(iterations):
     animate(i)
-"""
+plt.waitforbuttonpress()
 '================================================================================================'
 'D*/D'
 """
@@ -384,7 +380,7 @@ np.save(file, data)
 file.close
 """
 
-f, (a1,a2) = plt.subplots(1,2)
+f, (a2) = plt.subplots(1,1)
 """
 lin = np.polyfit(temp, pMSD, 1)
 lin_model_sim = np.poly1d(lin)
@@ -400,9 +396,11 @@ a1.plot(temp, lin_model_an(temp),color = 'r')
 """
 
 
-lin = np.polyfit(temp, pMSDb, 1)
+lin = np.polyfit(temp, pMSDb, 2)
 lin_model_sim = np.poly1d(lin)
-lin_model_an = np.poly1d([4*Db, lin[1]])
+#lin_model_an = np.poly1d([4*Db, lin[1]])
+
+print(lin)
 
 a2.scatter(temp,pMSDb, color='k' )
 a2.set_title('MSD')
@@ -410,7 +408,12 @@ a2.set_xlabel('Tiempo')
 a2.set_ylabel('MSD')
 
 a2.plot(temp, lin_model_sim(temp),color='g')
-a2.plot(temp, lin_model_an(temp),color = 'r')
+#a2.plot(temp, lin_model_an(temp),color = 'r')
+#s = "y="+str(lin[0])+"x^2+"+str(lin[1])+"x+"+str(lin[2])
+s = lin
+#a2.text(0,max(lin_model_an(temp[-1]),lin_model_sim(temp[-1])),s)
+a2.text(0,lin_model_sim(temp[-1]),s)
+
 """
 lin = np.polyfit(temp, pMSDb, 1)
 lin_model_sim = np.poly1d(lin)
